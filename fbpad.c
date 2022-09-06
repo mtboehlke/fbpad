@@ -54,6 +54,8 @@ static char pass[1024];
 static int passlen;
 static int cmdmode;		/* execute a command and exit */
 
+static int barstat;
+
 static int readchar(void)
 {
 	char b;
@@ -227,6 +229,21 @@ static void listtags(void)
 		pad_put(' ', r, c, fg, bg);
 }
 
+static void togglebar(void)
+{
+	barstat *= -1;
+	if (barstat < 0)
+		term_redraw(1);
+	else
+		listtags();
+}
+
+#define STAT_RET do {	\
+	if (barstat > 0)	\
+		listtags();		\
+	return;				\
+} while (0)
+
 static void directkey(void)
 {
 	char *shell[32] = SHELL;
@@ -254,10 +271,10 @@ static void directkey(void)
 		switch ((c = readchar())) {
 		case 'c':
 			t_exec(shell, 0);
-			return;
+			STAT_RET;
 		case ';':
 			t_exec(shell, 1);
-			return;
+			STAT_RET;
 		case 'm':
 			if (TERMOPEN(cterm()))
 				saved[ctag] = 1;
@@ -277,9 +294,9 @@ static void directkey(void)
 			return;
 		case 'o':
 			t_set(tterm(ltag));
-			return;
+			STAT_RET;
 		case 'p':
-			listtags();
+			togglebar();
 			return;
 		case '\t':
 			if (nterm() != cterm())
@@ -296,11 +313,11 @@ static void directkey(void)
 			return;
 		case 'y':
 			term_redraw(1);
-			return;
+			STAT_RET;
 		case CTRLKEY('e'):
 			if (!term_colors(CLRFILE))
 				term_redraw(1);
-			return;
+			STAT_RET;
 		case CTRLKEY('l'):
 			locked = 1;
 			passlen = 0;
@@ -319,11 +336,11 @@ static void directkey(void)
 			return;
 		case '-':
 			t_split(0);
-			return;
+			STAT_RET;
 		default:
 			if (strchr(tags, c)) {
 				t_set(tterm(strchr(tags, c) - tags));
-				return;
+				STAT_RET;
 			}
 			if (tmain())
 				term_send(ESC);
@@ -445,6 +462,7 @@ static void signalsetup(void)
 
 int main(int argc, char **argv)
 {
+	barstat = -1;
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
 	char **args = argv + 1;
@@ -466,6 +484,7 @@ int main(int argc, char **argv)
 		args++;
 	for (i = 0; i < NTAGS; i++)
 		saved[i] = strchr(TAGS_SAVED, tags[i % NTAGS]) != NULL;
+	togglebar();
 	mainloop(args[0] ? args : NULL);
 	write(1, show, strlen(show));
 	for (i = 0; i < NTERMS; i++)
