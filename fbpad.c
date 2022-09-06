@@ -54,6 +54,10 @@ static int passlen;
 static int cmdmode;		/* execute a command and exit */
 
 static int barstat;
+static const char *statfile;
+static char *statline;
+static size_t statsiz;
+static size_t statlen;
 
 static int readchar(void)
 {
@@ -210,7 +214,8 @@ static void listtags(void)
 	pad_put('S', r, c++, fg | FN_B, bg);
 	pad_put(':', r, c++, fg | FN_B, bg);
 	pad_put(' ', r, c++, fg | FN_B, bg);
-	for (i = 0; i < NTAGS && c + 2 < pad_cols(); i++) {
+	int n = MIN(32, statlen);
+	for (i = 0; i < NTAGS && c + 2 < pad_cols() - n; i++) {
 		int nt = 0;
 		if (TERMOPEN(i))
 			nt++;
@@ -223,8 +228,11 @@ static void listtags(void)
 			pad_put(tags[i], r, c++, colors[nt], bg);
 		pad_put(i == ctag ? ')' : ' ', r, c++, fg, bg);
 	}
-	for (; c < pad_cols(); c++)
+	for (; c < pad_cols() - n; c++)
 		pad_put(' ', r, c, fg, bg);
+
+	for (i = 0; i < n; i++)
+		pad_put(statline[i], r, c++, fg | FN_B, bg);
 }
 
 static void togglebar(void)
@@ -234,6 +242,23 @@ static void togglebar(void)
 		term_redraw(1);
 	else
 		listtags();
+}
+
+static void update_status(void)
+{
+	FILE *sfl;
+	ssize_t n;
+	if ((sfl = fopen(statfile, "r"))) {
+		if ((n = getline(&statline, &statsiz, sfl)) >= 0) {
+			if ((statlen = n))
+				if (statline[n-1] == '\n')
+					statline[n-1] = ' ';
+
+			if ( barstat > 0 && !hidden)
+				listtags();
+		}
+		fclose(sfl);
+	}
 }
 
 #define STAT_RET do {	\
@@ -425,6 +450,10 @@ static void signalreceived(int n)
 		while (waitpid(-1, NULL, WNOHANG) > 0)
 			;
 		break;
+	case SIGALRM:
+		if (statfile)
+			update_status();
+		break;
 	}
 }
 
@@ -439,12 +468,16 @@ static void signalsetup(void)
 	signal(SIGUSR1, signalreceived);
 	signal(SIGUSR2, signalreceived);
 	signal(SIGCHLD, signalreceived);
+	signal(SIGALRM, signalreceived);
 	ioctl(0, VT_SETMODE, &vtm);
 }
 
 int main(int argc, char **argv)
 {
-	barstat = -1;
+	barstat = 0;
+	statline = NULL;
+	statsiz = 0;
+	statlen = 0;
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
 	char **args = argv + 1;
@@ -456,6 +489,10 @@ int main(int argc, char **argv)
 	if (pad_init()) {
 		fprintf(stderr, "fbpad: cannot find fonts\n");
 		return 1;
+	}
+	if ((statfile = getenv("FBPAD_STATUS"))) {
+		barstat = -1;
+		update_status();
 	}
 	for (i = 0; i < NTERMS; i++)
 		terms[i] = term_make();
@@ -472,5 +509,13 @@ int main(int argc, char **argv)
 	pad_free();
 	scr_done();
 	fb_free();
+	if (statline)
+		free(statline);
+	if ((statline = getenv("STATUS_PID"))) {
+		execvpe("kill", ((char *[]){ "kill", statline, 0 }),
+			((char *[]){ 0 }));
+		perror("execve");
+		return 1;
+	}
 	return 0;
 }
