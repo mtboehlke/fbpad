@@ -1,5 +1,5 @@
 CC = cc
-CFLAGS = -Wall -O2
+CFLAGS = -Wall -O2 -D_GNU_SOURCE
 LDFLAGS =
 
 OBJS = fbpad.o term.o pad.o draw.o font.o isdw.o scrsnap.o
