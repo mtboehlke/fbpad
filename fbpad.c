@@ -20,6 +20,9 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pwd.h>
+#include <skalibs/exec.h>
+#include <skalibs/stralloc.h>
+#include <skalibs/strerr2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -56,10 +59,12 @@ static int cmdmode;		/* execute a command and exit */
 
 static int barstat;
 static const char *statfile;
-static char *scrnfile;
+static const char *scrnfile;
 static char *statline;
 static size_t statsiz;
 static size_t statlen;
+
+const char *PROG;
 
 static int readchar(void)
 {
@@ -477,47 +482,39 @@ static void signalsetup(void)
 	ioctl(0, VT_SETMODE, &vtm);
 }
 
-static int user_init(void)
+static void user_init(stralloc *sta)
 {
 	struct passwd *pw;
-	int ret = 0;
 	uid_t uid = geteuid();
 	if ((pw = getpwuid(uid))) {
-		size_t plen = strlen(SCRSHOT);
-		size_t tlen = strlen(pw->pw_name) + plen + 2;
-		if ((scrnfile = malloc(tlen))) {
-			strlcpy(scrnfile, SCRSHOT, tlen);
-			tlen -= plen;
-			strlcpy(scrnfile + plen, "-", tlen);
-			strlcpy(scrnfile + plen + 1, pw->pw_name, tlen - 1);
-			ret = 1;
-		} else
+		if ((stralloc_cats(sta, SCRSHOT))
+		&& (stralloc_append(sta, '-'))
+		&& (stralloc_cats(sta, pw->pw_name))
+		&& (stralloc_0(sta)))
+			scrnfile = sta->s;
+		else
 			scrnfile = SCRSHOT;
 	} else
 		scrnfile = SCRSHOT;
-
-	return ret;
 }
 
 int main(int argc, char **argv)
 {
+	PROG = argv[0];
 	barstat = 0;
 	statline = NULL;
 	statsiz = 0;
 	statlen = 0;
-	int cflg = user_init();
+	stralloc strafile = STRALLOC_ZERO;
+	user_init(&strafile);
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
 	char **args = argv + 1;
 	int i;
-	if (fb_init(getenv("FBDEV"))) {
-		fprintf(stderr, "fbpad: failed to initialize the framebuffer\n");
-		return 1;
-	}
-	if (pad_init()) {
-		fprintf(stderr, "fbpad: cannot find fonts\n");
-		return 1;
-	}
+	if (fb_init(getenv("FBDEV")))
+		strerr_dief1x(1, "failed to initialize the framebuffer");
+	if (pad_init())
+		strerr_dief1x(1, "cannot find fonts");
 	if ((statfile = getenv("FBPAD_STATUS"))) {
 		barstat = -1;
 		update_status();
@@ -537,15 +534,11 @@ int main(int argc, char **argv)
 	pad_free();
 	scr_done();
 	fb_free();
-	if (cflg)
-		free(scrnfile);
-	if (statline)
-		free(statline);
-	if ((statline = getenv("STATUS_PID"))) {
-		execvpe("kill", ((char *[]){ "kill", statline, 0 }),
-			((char *[]){ 0 }));
-		perror("execve");
-		return 1;
-	}
+	stralloc_free(&strafile);
+	free(statline);
+	if ((statline = getenv("STATUS_PID")))
+		xexec_ae("kill",
+			((char const *const []){ "kill", statline, 0 }),
+			((char const *const []){ 0 }));
 	return 0;
 }
