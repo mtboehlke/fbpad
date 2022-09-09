@@ -21,6 +21,8 @@
 #include <poll.h>
 #include <pwd.h>
 #include <skalibs/exec.h>
+#include <skalibs/config.h>
+#include <skalibs/djbunix.h>
 #include <skalibs/stralloc.h>
 #include <skalibs/strerr2.h>
 #include <stdio.h>
@@ -42,6 +44,9 @@
 #define NTERMS		(NTAGS * 2)
 #define TERMOPEN(i)	(term_fd(terms[i]))
 #define TERMSNAP(i)	(strchr(TAGS_SAVED, tags[(i) % NTAGS]))
+#define CHKSCRPT "backtick -n -D \"not${1}\" -E out { "					\
+	"redirfd -w 2 /dev/null dbclient -p $2 -l $1 localhost whoami } "	\
+	"test $1 = $out"
 
 static char tags[] = TAGS;
 static struct term *terms[NTERMS];
@@ -58,13 +63,16 @@ static int passlen;
 static int cmdmode;		/* execute a command and exit */
 
 static int barstat;
+static int nolock;
 static const char *statfile;
 static const char *scrnfile;
 static char *statline;
 static size_t statsiz;
 static size_t statlen;
+static struct passwd *pw;
 
 const char *PROG;
+extern char **environ;
 
 static int readchar(void)
 {
@@ -242,6 +250,38 @@ static void listtags(void)
 		pad_put(statline[i], r, c++, fg | FN_B, bg);
 }
 
+static int chkpass()
+{
+	pid_t cpid;
+	int ret = -1;
+	char **envp = environ;
+	char const *newenv[3] = { 0, 0, 0 };
+	stralloc psta = STRALLOC_ZERO;
+	if ((stralloc_catb(&psta, "DROPBEAR_PASSWORD=", 18))
+	&& (stralloc_catb(&psta, pass, passlen + 1))) {
+		newenv[0] = psta.s;
+		for (; *envp ; envp++) {
+			if (!strncmp(*envp, "PATH=", 5)) {
+				newenv[1] = *envp;
+				break;
+			}
+		} if (!newenv[1])
+			newenv[1] = "PATH="SKALIBS_DEFAULTPATH;
+		if ((cpid = child_spawn0("execlineb",
+		((char const *const []){ "execlineb", "-WS2",
+		"-c", CHKSCRPT, pw->pw_name, SSHPORT, 0 }), newenv))) {
+			int wstatus;
+			waitpid_nointr(cpid, &wstatus, 0);
+			if (WIFEXITED(wstatus))
+				ret = !WEXITSTATUS(wstatus);
+		} else
+			strerr_warnw1sys("Failed to spawn proccess");
+		stralloc_free(&psta);
+	} else
+		strerr_warnw1sys("stralloc");
+	return ret;
+}
+
 static void togglebar(void)
 {
 	barstat *= -1;
@@ -280,10 +320,10 @@ static void directkey(void)
 	char *mail[32] = MAIL;
 	char *editor[32] = EDITOR;
 	int c = readchar();
-	if (PASS && locked) {
+	if (!nolock && locked) {
 		if (c == '\r') {
 			pass[passlen] = '\0';
-			if (!strcmp(PASS, pass))
+			if (chkpass() > 0)
 				locked = 0;
 			passlen = 0;
 			return;
@@ -484,7 +524,6 @@ static void signalsetup(void)
 
 static void user_init(stralloc *sta)
 {
-	struct passwd *pw;
 	uid_t uid = geteuid();
 	if ((pw = getpwuid(uid))) {
 		if ((stralloc_cats(sta, SCRSHOT))
@@ -494,13 +533,16 @@ static void user_init(stralloc *sta)
 			scrnfile = sta->s;
 		else
 			scrnfile = SCRSHOT;
-	} else
+	} else {
 		scrnfile = SCRSHOT;
+		nolock = 1;
+	}
 }
 
 int main(int argc, char **argv)
 {
 	PROG = argv[0];
+	nolock = 0;
 	barstat = 0;
 	statline = NULL;
 	statsiz = 0;
@@ -524,8 +566,11 @@ int main(int argc, char **argv)
 	write(1, hide, strlen(hide));
 	signalsetup();
 	fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
-	while (args[0] && args[0][0] == '-')
+	while (args[0] && args[0][0] == '-') {
+		if (args[0][1] == 'u')
+			nolock = 1;
 		args++;
+	}
 	togglebar();
 	mainloop(args[0] ? args : NULL);
 	write(1, show, strlen(show));

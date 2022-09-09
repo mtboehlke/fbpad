@@ -23,8 +23,9 @@
 /* file from which to read terminal font and colour options */
 #define CLRFILE		"/tmp/clr"
 
-/* lock command password; NULL disables locking */
-#define PASS		NULL
+/* password checking is done via an ssh server listening on the localhost
+ * this should be the port it uses (as a string literal) */
+#define SSHPORT		"22"
 
 /* optimized version of fb_val() */
 #define FB_VAL(r, g, b)	fb_val((r), (g), (b))
