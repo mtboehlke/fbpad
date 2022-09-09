@@ -26,8 +26,9 @@
 /* quit confirmation key; zero disables confirmation */
 #define QUITKEY		0
 
-/* lock command password; NULL disables locking */
-#define PASS		NULL
+/* password checking is done via an ssh server listening on the localhost
+ * this should be the port it uses (as a string literal) */
+#define SSHPORT		"22"
 
 /* brighten colors 0-7 for bold text */
 #define BRIGHTEN	1
