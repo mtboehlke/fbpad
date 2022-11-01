@@ -24,8 +24,8 @@
 #define CLRFILE		"/tmp/clr"
 
 /* password checking is done via an ssh server listening on the localhost
- * this should be the port it uses (as a string literal) */
-#define SSHPORT		"22"
+ * this should be the port it uses */
+#define SSHPORT		22
 
 /* optimized version of fb_val() */
 #define FB_VAL(r, g, b)	fb_val((r), (g), (b))

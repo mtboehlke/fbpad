@@ -15,14 +15,15 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libssh2.h>
 #include <poll.h>
 #include <pwd.h>
 #include <skalibs/exec.h>
-#include <skalibs/config.h>
-#include <skalibs/djbunix.h>
+#include <skalibs/socket.h>
 #include <skalibs/stralloc.h>
 #include <skalibs/strerr2.h>
 #include <stdio.h>
@@ -30,6 +31,7 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
@@ -44,9 +46,6 @@
 #define NTERMS		(NTAGS * 2)
 #define TERMOPEN(i)	(term_fd(terms[i]))
 #define TERMSNAP(i)	(strchr(TAGS_SAVED, tags[(i) % NTAGS]))
-#define CHKSCRPT "backtick -n -D \"not${1}\" -E out { "					\
-	"redirfd -w 2 /dev/null dbclient -p $2 -l $1 localhost whoami } "	\
-	"test $1 = $out"
 
 static char tags[] = TAGS;
 static struct term *terms[NTERMS];
@@ -70,9 +69,9 @@ static char *statline;
 static size_t statsiz;
 static size_t statlen;
 static struct passwd *pw;
+static char ipadr[sizeof(struct in6_addr)];
 
 const char *PROG;
-extern char **environ;
 
 static int readchar(void)
 {
@@ -250,36 +249,42 @@ static void listtags(void)
 		pad_put(statline[i], r, c++, fg | FN_B, bg);
 }
 
-static int chkpass()
+static int chkpass(void)
 {
-	pid_t cpid;
-	int ret = -1;
-	char **envp = environ;
-	char const *newenv[3] = { 0, 0, 0 };
-	stralloc psta = STRALLOC_ZERO;
-	if ((stralloc_catb(&psta, "DROPBEAR_PASSWORD=", 18))
-	&& (stralloc_catb(&psta, pass, passlen + 1))) {
-		newenv[0] = psta.s;
-		for (; *envp ; envp++) {
-			if (!strncmp(*envp, "PATH=", 5)) {
-				newenv[1] = *envp;
-				break;
-			}
-		} if (!newenv[1])
-			newenv[1] = "PATH="SKALIBS_DEFAULTPATH;
-		if ((cpid = child_spawn0("execlineb",
-		((char const *const []){ "execlineb", "-WS2",
-		"-c", CHKSCRPT, pw->pw_name, SSHPORT, 0 }), newenv))) {
-			int wstatus;
-			waitpid_nointr(cpid, &wstatus, 0);
-			if (WIFEXITED(wstatus))
-				ret = !WEXITSTATUS(wstatus);
-		} else
-			strerr_warnw1sys("Failed to spawn proccess");
-		stralloc_free(&psta);
+	int sock, ret = -1;
+	LIBSSH2_SESSION *session;
+	if (libssh2_init(0)) {
+		strerr_warnw1sys("libssh2_init");
+		return ret;
+	}
+	if ((sock = socket(AF_INET6, SOCK_STREAM, 0)) < 0) {
+		strerr_warnwu1sys("create socket");
+		return ret;
+	}
+	if (socket_connect6(sock, ipadr, SSHPORT)) {
+		strerr_warnwu1sys("connect to socket");
+		return ret;
+	}
+	if (!(session = libssh2_session_init())) {
+		strerr_warnwu1sys("initialize libssh2 session");
+		return ret;
+	}
+	if (libssh2_session_handshake(session, sock)) {
+		strerr_warn1sys("libssh2 handshake failed");
+		return ret;
+	}
+	ret = libssh2_userauth_password(session, pw->pw_name, pass);
+	libssh2_session_disconnect(session, "Fbpad normal disconnect");
+	libssh2_session_free(session);
+	close(sock);
+	libssh2_exit();
+	if (ret) {
+		if (ret < 0)
+			return ret;
+		else
+			return 0;
 	} else
-		strerr_warnw1sys("stralloc");
-	return ret;
+		return 1;
 }
 
 static void togglebar(void)
@@ -524,8 +529,7 @@ static void signalsetup(void)
 
 static void user_init(stralloc *sta)
 {
-	uid_t uid = geteuid();
-	if ((pw = getpwuid(uid))) {
+	if ((pw = getpwuid(geteuid()))) {
 		if ((stralloc_cats(sta, SCRSHOT))
 		&& (stralloc_append(sta, '-'))
 		&& (stralloc_cats(sta, pw->pw_name))
@@ -536,6 +540,7 @@ static void user_init(stralloc *sta)
 	} else {
 		scrnfile = SCRSHOT;
 		nolock = 1;
+		strerr_warnwu1sys("determine user information");
 	}
 }
 
@@ -547,6 +552,10 @@ int main(int argc, char **argv)
 	statline = NULL;
 	statsiz = 0;
 	statlen = 0;
+	if (inet_pton(AF_INET6, "::1", ipadr) < 0) {
+		nolock = 1;
+		strerr_warnwu1sys("enable password checking");
+	}
 	stralloc strafile = STRALLOC_ZERO;
 	user_init(&strafile);
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";

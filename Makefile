@@ -1,6 +1,6 @@
 CC = cc
 CFLAGS = -Wall -O2
-LDFLAGS = -lskarnet
+LDFLAGS = -lskarnet -lssh2
 
 OBJS = fbpad.o term.o pad.o draw.o font.o isdw.o scrsnap.o
 
