@@ -27,8 +27,8 @@
 #define QUITKEY		0
 
 /* password checking is done via an ssh server listening on the localhost
- * this should be the port it uses (as a string literal) */
-#define SSHPORT		"22"
+ * this should be the port it uses */
+#define SSHPORT		22
 
 /* brighten colors 0-7 for bold text */
 #define BRIGHTEN	1
