@@ -22,6 +22,7 @@
 #include <libssh2.h>
 #include <poll.h>
 #include <pwd.h>
+#include <skalibs/djbunix.h>
 #include <skalibs/exec.h>
 #include <skalibs/socket.h>
 #include <skalibs/stralloc.h>
@@ -31,7 +32,6 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/socket.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
@@ -253,31 +253,30 @@ static int chkpass(void)
 {
 	int sock, ret = -1;
 	LIBSSH2_SESSION *session;
-	if (libssh2_init(0)) {
+	if (libssh2_init(0))
 		strerr_warnw1sys("libssh2_init");
-		return ret;
+	else {
+		if ((sock = socket_tcp6_b()) < 0)
+			strerr_warnwu1sys("create socket");
+		else {
+			if (socket_connect6(sock, ipadr, SSHPORT))
+				strerr_warnwu1sys("connect to socket");
+			else {
+				if ((session = libssh2_session_init())) {
+					if (libssh2_session_handshake(session, sock))
+						strerr_warn1sys("libssh2 handshake failed");
+					else {
+						ret = libssh2_userauth_password(session, pw->pw_name, pass);
+						libssh2_session_disconnect(session, "Fbpad normal disconnect");
+					}
+					libssh2_session_free(session);
+				} else
+					strerr_warnwu1sys("initialize libssh2 session");
+			}
+			fd_close(sock);
+		}
+		libssh2_exit();
 	}
-	if ((sock = socket(AF_INET6, SOCK_STREAM, 0)) < 0) {
-		strerr_warnwu1sys("create socket");
-		return ret;
-	}
-	if (socket_connect6(sock, ipadr, SSHPORT)) {
-		strerr_warnwu1sys("connect to socket");
-		return ret;
-	}
-	if (!(session = libssh2_session_init())) {
-		strerr_warnwu1sys("initialize libssh2 session");
-		return ret;
-	}
-	if (libssh2_session_handshake(session, sock)) {
-		strerr_warn1sys("libssh2 handshake failed");
-		return ret;
-	}
-	ret = libssh2_userauth_password(session, pw->pw_name, pass);
-	libssh2_session_disconnect(session, "Fbpad normal disconnect");
-	libssh2_session_free(session);
-	close(sock);
-	libssh2_exit();
 	if (ret) {
 		if (ret < 0)
 			return ret;
@@ -546,7 +545,7 @@ static void user_init(stralloc *sta)
 
 int main(int argc, char **argv)
 {
-	PROG = argv[0];
+	PROG = argc > 0 ? argv[0] : "fbpad";
 	nolock = 0;
 	barstat = 0;
 	statline = NULL;
