@@ -26,7 +26,7 @@
 #include <skalibs/exec.h>
 #include <skalibs/socket.h>
 #include <skalibs/stralloc.h>
-#include <skalibs/strerr2.h>
+#include <skalibs/strerr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -254,24 +254,24 @@ static int chkpass(void)
 	int sock, ret = -1;
 	LIBSSH2_SESSION *session;
 	if (libssh2_init(0))
-		strerr_warnw1sys("libssh2_init");
+		strerr_warnwnsys(1, "libssh2_init");
 	else {
 		if ((sock = socket_tcp6_b()) < 0)
-			strerr_warnwu1sys("create socket");
+			strerr_warnwunsys(1, "create socket");
 		else {
 			if (socket_connect6(sock, ipadr, SSHPORT))
-				strerr_warnwu1sys("connect to socket");
+				strerr_warnwunsys(1, "connect to socket");
 			else {
 				if ((session = libssh2_session_init())) {
 					if (libssh2_session_handshake(session, sock))
-						strerr_warn1sys("libssh2 handshake failed");
+						strerr_warnwnsys(1, "libssh2 handshake failed");
 					else {
 						ret = libssh2_userauth_password(session, pw->pw_name, pass);
 						libssh2_session_disconnect(session, "Fbpad normal disconnect");
 					}
 					libssh2_session_free(session);
 				} else
-					strerr_warnwu1sys("initialize libssh2 session");
+					strerr_warnwunsys(1, "initialize libssh2 session");
 			}
 			fd_close(sock);
 		}
@@ -539,7 +539,7 @@ static void user_init(stralloc *sta)
 	} else {
 		scrnfile = SCRSHOT;
 		nolock = 1;
-		strerr_warnwu1sys("determine user information");
+		strerr_warnwunsys(1, "determine user information");
 	}
 }
 
@@ -553,7 +553,7 @@ int main(int argc, char **argv)
 	statlen = 0;
 	if (inet_pton(AF_INET6, "::1", ipadr) < 0) {
 		nolock = 1;
-		strerr_warnwu1sys("enable password checking");
+		strerr_warnwunsys(1, "enable password checking");
 	}
 	stralloc strafile = STRALLOC_ZERO;
 	user_init(&strafile);
@@ -562,9 +562,9 @@ int main(int argc, char **argv)
 	char **args = argv + 1;
 	int i;
 	if (fb_init(getenv("FBDEV")))
-		strerr_dief1x(1, "failed to initialize the framebuffer");
+		strerr_diefn(EXIT_FAILURE, 1, "failed to initialize the framebuffer");
 	if (pad_init())
-		strerr_dief1x(1, "cannot find fonts");
+		strerr_diefn(EXIT_FAILURE, 1, "cannot find fonts");
 	if ((statfile = getenv("FBPAD_STATUS"))) {
 		barstat = -1;
 		update_status();
@@ -593,5 +593,5 @@ int main(int argc, char **argv)
 		xexec_ae("kill",
 			((char const *const []){ "kill", statline, 0 }),
 			((char const *const []){ 0 }));
-	return 0;
+	return EXIT_SUCCESS;
 }
