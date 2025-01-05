@@ -26,7 +26,7 @@ void term_read(void);
 void term_send(int c);
 void term_exec(char **args, int swsig);
 void term_end(void);
-void term_screenshot(char *path);
+void term_screenshot(const char *path, int a);
 void term_scrl(int pos);
 void term_redraw(int all);
 int term_colors(char *path);
