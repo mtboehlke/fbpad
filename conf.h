@@ -15,7 +15,9 @@
 #define FI		NULL
 #define FB		NULL
 
-/* where to write the screen shot */
+/* base file name to write the screen shot
+ * user's name will be appended to this if possible
+ * e.g. if "/tmp/scr" then file will be "/tmp/scr-name" */
 #define SCRSHOT		"/tmp/scr"
 
 /* file from which to read terminal font and colour options */

@@ -19,6 +19,7 @@ m-p		show tag summary
 m-o		jump to the previous tag
 m-tab		show the next terminal
 m-s		create a text screenshot (SCRSHOT)
+c-m-s		like m-s, but include the scroll buffer too
 m-y		redraw the terminal
 c-m-e		reload the fonts and terminal colors (CLRFILE)
 c-m-l		lock the screen; use PASS to unlock

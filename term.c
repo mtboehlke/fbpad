@@ -590,11 +590,21 @@ static int writeutf8(char *dst, int c)
 	return 4;
 }
 
-void term_screenshot(char *path)
+void term_screenshot(const char *path, int a)
 {
 	char buf[1 << 11];
 	int fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
 	int i, j;
+	if (a) {
+		for (i = 0; i < NHIST; i++) {
+			char *t = buf;
+			for (j = 0; j < pad_cols(); j++)
+				if (~(term->hist)[OFFSET(i, j)] & DWCHAR)
+					t += writeutf8(t, (term->hist)[OFFSET(i, j)]);
+			*t++ = '\n';
+			write(fd, buf, t - buf);
+		}
+	}
 	for (i = 0; i < pad_rows(); i++) {
 		char *s = buf;
 		for (j = 0; j < pad_cols(); j++)

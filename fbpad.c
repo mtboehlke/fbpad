@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -55,6 +56,7 @@ static int cmdmode;		/* execute a command and exit */
 
 static int barstat;
 static const char *statfile;
+static char *scrnfile;
 static char *statline;
 static size_t statsiz;
 static size_t statlen;
@@ -317,7 +319,10 @@ static void directkey(void)
 			exitit = 1;
 			return;
 		case 's':
-			term_screenshot(SCRSHOT);
+			term_screenshot(scrnfile, 0);
+			return;
+		case CTRLKEY('s'):
+			term_screenshot(scrnfile, 1);
 			return;
 		case 'y':
 			term_redraw(1);
@@ -472,12 +477,35 @@ static void signalsetup(void)
 	ioctl(0, VT_SETMODE, &vtm);
 }
 
+static int user_init(void)
+{
+	struct passwd *pw;
+	int ret = 0;
+	uid_t uid = geteuid();
+	if ((pw = getpwuid(uid))) {
+		size_t plen = strlen(SCRSHOT);
+		size_t tlen = strlen(pw->pw_name) + plen + 2;
+		if ((scrnfile = malloc(tlen))) {
+			strlcpy(scrnfile, SCRSHOT, tlen);
+			tlen -= plen;
+			strlcpy(scrnfile + plen, "-", tlen);
+			strlcpy(scrnfile + plen + 1, pw->pw_name, tlen - 1);
+			ret = 1;
+		} else
+			scrnfile = SCRSHOT;
+	} else
+		scrnfile = SCRSHOT;
+
+	return ret;
+}
+
 int main(int argc, char **argv)
 {
 	barstat = 0;
 	statline = NULL;
 	statsiz = 0;
 	statlen = 0;
+	int cflg = user_init();
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
 	char **args = argv + 1;
@@ -509,6 +537,8 @@ int main(int argc, char **argv)
 	pad_free();
 	scr_done();
 	fb_free();
+	if (cflg)
+		free(scrnfile);
 	if (statline)
 		free(statline);
 	if ((statline = getenv("STATUS_PID"))) {
