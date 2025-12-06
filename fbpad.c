@@ -15,22 +15,20 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <libssh2.h>
+#include <libssh/libssh.h>
 #include <poll.h>
 #include <pwd.h>
-#include <skalibs/djbunix.h>
 #include <skalibs/exec.h>
-#include <skalibs/socket.h>
 #include <skalibs/stralloc.h>
 #include <skalibs/strerr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <syslog.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -64,13 +62,13 @@ static int cmdmode;		/* execute a command and exit */
 
 static int barstat;
 static int nolock;
+static const char *privfile;
 static const char *statfile;
 static const char *scrnfile;
 static char *statline;
 static size_t statsiz;
 static size_t statlen;
 static struct passwd *pw;
-static char ipadr[sizeof(struct in6_addr)];
 
 const char *PROG;
 
@@ -253,44 +251,22 @@ static void listtags(void)
 
 static int chkpass(void)
 {
-	int sock, ret = -1;
-	LIBSSH2_SESSION *session;
-	if (libssh2_init(0)) {
-		strerr_warnwnsys(1, "libssh2_init");
-		return ret;
-	}
-	if ((sock = socket_tcp6_b()) < 0) {
-		strerr_warnwunsys(1, "create socket");
-		goto clean1;
-	}
-	if (socket_connect6(sock, ipadr, SSHPORT)) {
-		strerr_warnwunsys(1, "connect to socket");
-		goto clean2;
-	}
-	if (!(session = libssh2_session_init())) {
-		strerr_warnwunsys(1, "initialize libssh2 session");
-		goto clean2;
-	}
-	if (libssh2_session_handshake(session, sock)) {
-		strerr_warnwnsys(1, "libssh2 handshake failed");
-		goto clean3;
-	}
-	ret = libssh2_userauth_password(session, pw->pw_name, pass);
-	libssh2_session_disconnect(session, "Fbpad normal disconnect");
-clean3:
-	libssh2_session_free(session);
-clean2:
-	fd_close(sock);
-clean1:
-	libssh2_exit();
-
-	if (ret) {
-		if (ret < 0)
-			return ret;
-		else
-			return 0;
-	} else
+	ssh_key key;
+	switch (ssh_pki_import_privkey_file(privfile, pass,
+		NULL, NULL, &key)) {
+	case SSH_OK:
+		ssh_key_free(key);
 		return 1;
+	case SSH_EOF:
+		strerr_warnwnsys(1, privfile);
+		break;
+	default:
+		syslog(LOG_WARNING | LOG_AUTH, "%s %s",
+			"failed to unlock screen for user",
+			pw->pw_name);
+		break;
+	}
+	return 0;
 }
 
 static void togglebar(void)
@@ -334,7 +310,7 @@ static void directkey(void)
 	if (!nolock && locked) {
 		if (c == '\r') {
 			pass[passlen] = '\0';
-			if (chkpass() > 0)
+			if (chkpass())
 				locked = 0;
 			passlen = 0;
 			return;
@@ -498,6 +474,14 @@ static void mainloop(char **args)
 		cmdmode = 1;
 		t_exec(args, 0);
 	}
+	if (!(nolock || (access(privfile, R_OK) == 0))) {
+		strerr_warnwnsys(1, privfile);
+		strerr_warnn(1, "\rBe careful!\n\r"
+			"Screen locking is still enabled "
+			"but unlocking will fail unless\n\r"
+			"access to the key file is restored!\n\r"
+			"Invoke fbpad with '-u' to disable locking.\n\r");
+	}
 	while (!exitit)
 		if (pollterms())
 			break;
@@ -549,45 +533,68 @@ static void signalsetup(void)
 	ioctl(0, VT_SETMODE, &vtm);
 }
 
-static void user_init(stralloc *sta)
+/* static void user_init(stralloc arr[static 2]) */
+static void user_init(stralloc *arr)
 {
-	if ((pw = getpwuid(geteuid()))) {
-		if ((stralloc_cats(sta, SCRSHOT))
-		&& (stralloc_append(sta, '-'))
-		&& (stralloc_cats(sta, pw->pw_name))
-		&& (stralloc_0(sta)))
-			scrnfile = sta->s;
-		else
-			scrnfile = SCRSHOT;
-	} else {
-		scrnfile = SCRSHOT;
-		nolock = 1;
+	nolock = 1;
+	scrnfile = SCRSHOT ? SCRSHOT : "/dev/null";
+	if (!(pw = getpwuid(geteuid()))) {
 		strerr_warnwunsys(1, "determine user information");
+		return;
 	}
+	stralloc *sap;
+	if (SCRSHOT) {
+		sap = &arr[0];
+		if ((stralloc_cats(sap, SCRSHOT))
+		 && (stralloc_append(sap, '-'))
+		 && (stralloc_cats(sap, pw->pw_name))
+		 && (stralloc_0(sap)))
+			scrnfile = sap->s;
+		else
+			strerr_warnwnsys(1, "stralloc");
+	}
+	if (KEYNAME) {
+		sap = &arr[1];
+		if ((stralloc_cats(sap, pw->pw_dir))
+		 && (stralloc_cats(sap, "/.ssh/"KEYNAME))
+		 && (stralloc_0(sap))) {
+			nolock = 0;
+			privfile = sap->s;
+		} else {
+			strerr_warnwnsys(1, "stralloc");
+		}
+	}
+}
+
+/* static void cleanup(stralloc arr[static 2]) */
+static void cleanup(stralloc *arr)
+{
+	stralloc_free(&arr[0]);
+	stralloc_free(&arr[1]);
 }
 
 int main(int argc, char **argv)
 {
 	PROG = argc > 0 ? argv[0] : "fbpad";
-	nolock = 0;
-	barstat = 0;
+	privfile = NULL;
 	statline = NULL;
+	barstat = 0;
 	statsiz = 0;
 	statlen = 0;
-	if (inet_pton(AF_INET6, "::1", ipadr) < 0) {
-		nolock = 1;
-		strerr_warnwunsys(1, "enable password checking");
-	}
-	stralloc strafile = STRALLOC_ZERO;
-	user_init(&strafile);
+	stralloc strs[2] = { STRALLOC_ZERO, STRALLOC_ZERO };
+	user_init(strs);
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
 	char **args = argv + 1;
 	int i;
-	if (fb_init(getenv("FBDEV")))
+	if (fb_init(getenv("FBDEV"))) {
+		cleanup(strs);
 		strerr_diefn(EXIT_FAILURE, 1, "failed to initialize the framebuffer");
-	if (pad_init())
+	}
+	if (pad_init()) {
+		cleanup(strs);
 		strerr_diefn(EXIT_FAILURE, 1, "cannot find fonts");
+	}
 	if ((statfile = getenv("FBPAD_STATUS"))) {
 		barstat = -1;
 		update_status();
@@ -612,7 +619,7 @@ int main(int argc, char **argv)
 	pad_free();
 	scr_done();
 	fb_free();
-	stralloc_free(&strafile);
+	cleanup(strs);
 	free(statline);
 	if ((statline = getenv("STATUS_PID")))
 		xexec_ae("kill",

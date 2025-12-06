@@ -26,9 +26,7 @@
 /* quit confirmation key; zero disables confirmation */
 #define QUITKEY		0
 
-/* password checking is done via an ssh server listening on the localhost
- * this should be the port it uses */
-#define SSHPORT		22
+#define KEYNAME		"id_rsa"
 
 /* brighten colors 0-7 for bold text */
 #define BRIGHTEN	1
