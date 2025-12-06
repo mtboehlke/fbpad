@@ -18,13 +18,13 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <libssh/libssh.h>
 #include <poll.h>
 #include <pwd.h>
+#include <skalibs/djbunix.h>
 #include <skalibs/exec.h>
+#include <skalibs/skamisc.h>
 #include <skalibs/stralloc.h>
 #include <skalibs/strerr.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
@@ -37,6 +37,9 @@
 #include "conf.h"
 #include "fbpad.h"
 #include "draw.h"
+
+#define LIBSSH_LEGACY_0_4
+#include <libssh/libssh.h>
 
 #define CTRLKEY(x)	((x) - 96)
 #define POLLFLAGS	(POLLIN | POLLHUP | POLLERR | POLLNVAL)
@@ -65,9 +68,7 @@ static int nolock;
 static const char *privfile;
 static const char *statfile;
 static const char *scrnfile;
-static char *statline;
-static size_t statsiz;
-static size_t statlen;
+static stralloc *statline;
 static struct passwd *pw;
 
 const char *PROG;
@@ -228,7 +229,7 @@ static void listtags(void)
 	pad_put('S', r, c++, fg | FN_B, bg);
 	pad_put(':', r, c++, fg | FN_B, bg);
 	pad_put(' ', r, c++, fg | FN_B, bg);
-	int n = MIN(32, statlen);
+	int n = MIN(32, statline->len);
 	for (i = 0; i < NTAGS && c + 2 < pad_cols() - n; i++) {
 		int nt = 0;
 		if (TERMOPEN(i))
@@ -245,8 +246,9 @@ static void listtags(void)
 	for (; c < pad_cols() - n; c++)
 		pad_put(' ', r, c, fg, bg);
 
+	char *line = statline->s;
 	for (i = 0; i < n; i++)
-		pad_put(statline[i], r, c++, fg | FN_B, bg);
+		pad_put(line[i], r, c++, fg | FN_B, bg);
 }
 
 static int chkpass(void)
@@ -280,18 +282,22 @@ static void togglebar(void)
 
 static void update_status(void)
 {
-	FILE *sfl;
-	ssize_t n;
-	if ((sfl = fopen(statfile, "r"))) {
-		if ((n = getline(&statline, &statsiz, sfl)) >= 0) {
-			if ((statlen = n))
-				if (statline[n-1] == '\n')
-					statline[n-1] = ' ';
-
-			if ( barstat > 0 && !hidden)
+	char bis[BUFFER_INSIZE_SMALL];
+	int fd = open_read(statfile);
+	if (fd >= 0) {
+		buffer fbuf = BUFFER_INIT(&fd_readv, fd,
+			bis, BUFFER_INSIZE_SMALL);
+		statline->len = 0;
+		if (skagetln(&fbuf, statline, '\n')) {
+			size_t slen = statline->len;
+			char *line = statline->s;
+			if (slen && (line[slen - 1] == '\n')) {
+				line[slen - 1] = ' ';
+			}
+			if (barstat > 0 && !hidden)
 				listtags();
 		}
-		fclose(sfl);
+		fd_close(fd);
 	}
 }
 
@@ -577,10 +583,9 @@ int main(int argc, char **argv)
 {
 	PROG = argc > 0 ? argv[0] : "fbpad";
 	privfile = NULL;
-	statline = NULL;
 	barstat = 0;
-	statsiz = 0;
-	statlen = 0;
+	stralloc stat = STRALLOC_ZERO;
+	statline = &stat;
 	stralloc strs[2] = { STRALLOC_ZERO, STRALLOC_ZERO };
 	user_init(strs);
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
@@ -620,10 +625,10 @@ int main(int argc, char **argv)
 	scr_done();
 	fb_free();
 	cleanup(strs);
-	free(statline);
-	if ((statline = getenv("STATUS_PID")))
-		xexec_ae("kill",
-			((char const *const []){ "kill", statline, 0 }),
-			((char const *const []){ 0 }));
+	stralloc_free(statline);
+	char *pid = getenv("STATUS_PID");
+	if (pid) xexec_ae("kill",
+		((char const *const []){ "kill", pid, 0 }),
+		((char const *const []){ 0 }));
 	return EXIT_SUCCESS;
 }
