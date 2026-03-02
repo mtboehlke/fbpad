@@ -539,18 +539,32 @@ static void signalsetup(void)
 	ioctl(0, VT_SETMODE, &vtm);
 }
 
-/* static void user_init(stralloc arr[static 2]) */
+/* static void user_init(stralloc arr[static 3]) */
 static void user_init(stralloc *arr)
 {
 	nolock = 1;
 	scrnfile = SCRSHOT ? SCRSHOT : "/dev/null";
-	if (!(pw = getpwuid(geteuid()))) {
-		strerr_warnwunsys(1, "determine user information");
-		return;
+	for (uid_t id = geteuid(); ; ) {
+		if (!stralloc_readyplus(&arr[0], 512)) {
+			goto ret;
+		}
+		struct passwd *result;
+		int e = getpwuid_r(id, pw, arr[0].s, arr[0].a, &result);
+		if (result) { break; }
+		switch (e) {
+		case ERANGE:
+			break;
+		case 0:
+			errno = ENOENT;
+			goto ret;
+		default:
+			errno = e;
+			goto ret;
+		}
 	}
 	stralloc *sap;
 	if (SCRSHOT) {
-		sap = &arr[0];
+		sap = &arr[1];
 		if ((stralloc_cats(sap, SCRSHOT))
 		 && (stralloc_append(sap, '-'))
 		 && (stralloc_cats(sap, pw->pw_name))
@@ -560,7 +574,7 @@ static void user_init(stralloc *arr)
 			strerr_warnwnsys(1, "stralloc");
 	}
 	if (KEYNAME) {
-		sap = &arr[1];
+		sap = &arr[2];
 		if ((stralloc_cats(sap, pw->pw_dir))
 		 && (stralloc_cats(sap, "/.ssh/"KEYNAME))
 		 && (stralloc_0(sap))) {
@@ -570,13 +584,17 @@ static void user_init(stralloc *arr)
 			strerr_warnwnsys(1, "stralloc");
 		}
 	}
+	return;
+ret:
+	strerr_warnwunsys(1, "determine user information");
 }
 
-/* static void cleanup(stralloc arr[static 2]) */
+/* static void cleanup(stralloc arr[static 3]) */
 static void cleanup(stralloc *arr)
 {
 	stralloc_free(&arr[0]);
 	stralloc_free(&arr[1]);
+	stralloc_free(&arr[2]);
 }
 
 int main(int argc, char **argv)
@@ -586,7 +604,9 @@ int main(int argc, char **argv)
 	barstat = 0;
 	stralloc stat = STRALLOC_ZERO;
 	statline = &stat;
-	stralloc strs[2] = { STRALLOC_ZERO, STRALLOC_ZERO };
+	stralloc strs[3] = { STRALLOC_ZERO, STRALLOC_ZERO, STRALLOC_ZERO };
+	struct passwd pwd;
+	pw = &pwd;
 	user_init(strs);
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
