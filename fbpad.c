@@ -51,6 +51,7 @@ static int taglock;		/* disable tag switching */
 static char pass[1024];
 static int passlen;
 static int cmdmode;		/* execute a command and exit */
+static int barstat;
 
 /* the current terminal */
 static int cterm(void)
@@ -216,6 +217,21 @@ static void listtags(void)
 		pad_put(' ', r, c, fg, bg);
 }
 
+static void togglebar(void)
+{
+	barstat *= -1;
+	if (barstat < 0)
+		term_redraw(1);
+	else
+		listtags();
+}
+
+#define STAT_RET do {	\
+	if (barstat > 0)	\
+		listtags();		\
+	return;				\
+} while (0)
+
 static void directkey(void)
 {
 	char *tags = conf_tags();
@@ -245,7 +261,7 @@ static void directkey(void)
 		c = (unsigned char) user[1];
 		if (!TERMOPEN(cterm()) && conf_command(c)) {
 			t_exec(conf_command(c), c == ';');
-			return;
+			STAT_RET;
 		}
 		switch (c) {
 		case 'e':
@@ -262,9 +278,10 @@ static void directkey(void)
 			return;
 		case 'o':
 			t_set(tterm(ltag));
-			return;
+			STAT_RET;
 		case 'p':
 			listtags();
+			togglebar();
 			return;
 		case '\t':
 			if (nterm() != cterm())
@@ -282,12 +299,12 @@ static void directkey(void)
 			return;
 		case 'y':
 			term_redraw(1);
-			return;
+			STAT_RET;
 		case CTRLKEY('e'):
 			if (conf_read() > 0)
 				pad_init(conf_font(0), conf_font(1), conf_font(2));
 			term_redraw(1);
-			return;
+			STAT_RET;
 		case CTRLKEY('l'):
 			locked = 1;
 			passlen = 0;
@@ -306,11 +323,11 @@ static void directkey(void)
 			return;
 		case '-':
 			t_split(0);
-			return;
+			STAT_RET;
 		default:
 			if (strchr(tags, c)) {
 				t_set(tterm(strchr(tags, c) - tags));
-				return;
+				STAT_RET;
 			}
 		}
 	}
@@ -430,6 +447,7 @@ static void signalsetup(void)
 
 int main(int argc, char **argv)
 {
+	barstat = -1;
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
 	char **args = argv + 1;
@@ -450,6 +468,7 @@ int main(int argc, char **argv)
 		args++;
 	for (i = 0; conf_tags()[i]; i++)
 		saved[i] = strchr(conf_saved(), conf_tags()[i % NTAGS]) != NULL;
+	togglebar();
 	mainloop(args[0] ? args : NULL);
 	write(1, show, strlen(show));
 	for (i = 0; i < NTERMS; i++)
