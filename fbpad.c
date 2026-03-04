@@ -19,7 +19,11 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <stdio.h>
+#include <skalibs/djbunix.h>
+#include <skalibs/exec.h>
+#include <skalibs/skamisc.h>
+#include <skalibs/stralloc.h>
+#include <skalibs/strerr.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
@@ -52,6 +56,8 @@ static char pass[1024];
 static int passlen;
 static int cmdmode;		/* execute a command and exit */
 static int barstat;
+static const char *statfile;
+static stralloc *statline;
 
 /* the current terminal */
 static int cterm(void)
@@ -200,7 +206,8 @@ static void listtags(void)
 	pad_put('S', r, c++, fg | FN_B, bg);
 	pad_put(':', r, c++, fg | FN_B, bg);
 	pad_put(' ', r, c++, fg | FN_B, bg);
-	for (i = 0; i < NTAGS && c + 2 < pad_cols(); i++) {
+	int n = MIN(32, statline->len);
+	for (i = 0; i < NTAGS && c + 2 < pad_cols() - n; i++) {
 		int nt = 0;
 		if (TERMOPEN(i))
 			nt++;
@@ -213,8 +220,12 @@ static void listtags(void)
 			pad_put(tags[i], r, c++, colors[nt], bg);
 		pad_put(i == ctag ? ')' : ' ', r, c++, fg, bg);
 	}
-	for (; c < pad_cols(); c++)
+	for (; c < pad_cols() - n; c++)
 		pad_put(' ', r, c, fg, bg);
+
+	char *line = statline->s;
+	for (i = 0; i < n; i++)
+		pad_put(line[i], r, c++, fg | FN_B, bg);
 }
 
 static void togglebar(void)
@@ -224,6 +235,26 @@ static void togglebar(void)
 		term_redraw(1);
 	else
 		listtags();
+}
+
+static void update_status(void) {
+	char bis[BUFFER_INSIZE_SMALL];
+	int fd = open_read(statfile);
+	if (fd >= 0) {
+		buffer fbuf = BUFFER_INIT(&fd_readv, fd,
+			bis, BUFFER_INSIZE_SMALL);
+		statline->len = 0;
+		if (skagetln(&fbuf, statline, '\n')) {
+			size_t slen = statline->len;
+			char *line = statline->s;
+			if (slen && line[slen - 1] == '\n') {
+				line[slen - 1] = ' ';
+			}
+			if (barstat > 0 && !hidden)
+				listtags();
+		}
+		fd_close(fd);
+	}
 }
 
 #define STAT_RET do {	\
@@ -427,6 +458,10 @@ static void signalreceived(int n)
 		while (waitpid(-1, NULL, WNOHANG) > 0)
 			;
 		break;
+	case SIGALRM:
+		if (statfile)
+			update_status();
+		break;
 	}
 }
 
@@ -441,27 +476,35 @@ static void signalsetup(void)
 	signal(SIGUSR1, signalreceived);
 	signal(SIGUSR2, signalreceived);
 	signal(SIGCHLD, signalreceived);
+	signal(SIGALRM, signalreceived);
 	signal(SIGPIPE, SIG_IGN);
 	ioctl(0, VT_SETMODE, &vtm);
 }
 
 int main(int argc, char **argv)
 {
-	barstat = -1;
+	PROG = argc > 0 ? argv[0] : "fbpad";
+	barstat = 0;
+	stralloc stat = STRALLOC_ZERO;
+	statline = &stat;
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
 	char **args = argv + 1;
 	int i;
 	conf_read();
 	if (fb_init(getenv("FBDEV"))) {
-		fprintf(stderr, "fbpad: failed to initialize the framebuffer\n");
-		return 1;
+		strerr_diefn(EXIT_FAILURE, 1,
+			"failed to initialize the framebuffer");
 	}
 	if (pad_init(conf_font(0), conf_font(1), conf_font(2))) {
-		fprintf(stderr, "fbpad: cannot find fonts\n");
-		return 1;
+		strerr_diefn(EXIT_FAILURE, 1,
+			"cannot find fonts");
 	}
 	write(1, hide, strlen(hide));
+	if ((statfile = getenv("FBPAD_STATUS"))) {
+		barstat = -1;
+		update_status();
+	}
 	signalsetup();
 	fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
 	while (args[0] && args[0][0] == '-')
@@ -477,5 +520,10 @@ int main(int argc, char **argv)
 	pad_free();
 	scr_done();
 	fb_free();
-	return 0;
+	stralloc_free(statline);
+	char *pid = getenv("STATUS_PID");
+	if (pid) xexec_ae("kill",
+		((char const *const []){ "kill", "--", pid, 0 }),
+		((char const *const []){ 0 }));
+	return EXIT_SUCCESS;
 }
