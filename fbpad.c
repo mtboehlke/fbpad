@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pwd.h>
 #include <skalibs/djbunix.h>
 #include <skalibs/exec.h>
 #include <skalibs/skamisc.h>
@@ -27,6 +28,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <string.h>
+#include <syslog.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -34,6 +36,9 @@
 #include <linux/vt.h>
 #include "fbpad.h"
 #include "draw.h"
+
+#define LIBSSH_LEGACY_0_4
+#include <libssh/libssh.h>
 
 #define CTRLKEY(x)	((x) - 96)
 #define POLLFLAGS	(POLLIN | POLLHUP | POLLERR | POLLNVAL)
@@ -55,7 +60,11 @@ static int taglock;		/* disable tag switching */
 static char pass[1024];
 static int passlen;
 static int cmdmode;		/* execute a command and exit */
+
 static int barstat;
+static int lockable;
+static const char *username;
+static const char *keyfile;
 static const char *statfile;
 static stralloc *statline;
 
@@ -257,6 +266,30 @@ static void update_status(void) {
 	}
 }
 
+static int chkpass(void)
+{
+	ssh_key key;
+	switch (ssh_pki_import_privkey_file(keyfile, pass,
+		NULL, NULL, &key)) {
+	case SSH_OK:
+		ssh_key_free(key);
+		return 1;
+	case SSH_EOF:
+		strerr_warnwnsys(1, keyfile);
+		break;
+	default:
+		syslog(LOG_WARNING | LOG_AUTH, "%s %s",
+			"failed to unlock screen for user", username);
+		break;
+	}
+	return 0;
+}
+
+static void chklockable(void)
+{
+	lockable = conf_pass()[0] && keyfile[0];
+}
+
 #define STAT_RET do {	\
 	if (barstat > 0)	\
 		listtags();		\
@@ -271,10 +304,10 @@ static void directkey(void)
 	int c = (unsigned char) user[0];
 	if (n <= 0)
 		return;
-	if (conf_pass()[0] && locked) {
+	if (lockable && locked) {
 		if (c == '\r') {
 			pass[passlen] = '\0';
-			if (!strcmp(conf_pass(), pass))
+			if (chkpass())
 				locked = 0;
 			passlen = 0;
 			return;
@@ -332,8 +365,12 @@ static void directkey(void)
 			term_redraw(1);
 			STAT_RET;
 		case CTRLKEY('e'):
-			if (conf_read() > 0)
-				pad_init(conf_font(0), conf_font(1), conf_font(2));
+			int r = conf_read();
+			if (r >= 0) {
+				chklockable();
+				if (r)
+					pad_init(conf_font(0), conf_font(1), conf_font(2));
+			}
 			term_redraw(1);
 			STAT_RET;
 		case CTRLKEY('l'):
@@ -481,17 +518,63 @@ static void signalsetup(void)
 	ioctl(0, VT_SETMODE, &vtm);
 }
 
+static void user_init(stralloc *str)
+{
+	struct passwd pw;
+	stralloc temp = STRALLOC_ZERO;
+	for (uid_t uid = geteuid(); ; ) {
+		if (!stralloc_readyplus(&temp, 512)) {
+			goto err;
+		}
+		struct passwd *result;
+		int e = getpwuid_r(uid, &pw, temp.s, temp.a, &result);
+		if (result)
+			break;
+		switch (e) {
+		case ERANGE:
+			break;
+		case 0:
+			errno = ENOENT;
+			goto err;
+		default:
+			errno = e;
+			goto err;
+		}
+	}
+	if (!(stralloc_cats(str, pw.pw_name) &&
+		  stralloc_catb(str, "", 1))) {
+		goto err;
+	}
+	size_t i = str->len;
+	if (!(stralloc_cats(str, pw.pw_dir) &&
+		  stralloc_catb(str, "/.ssh/id_fbpad", 15))) {
+		goto err;
+	}
+	stralloc_free(&temp);
+	username = str->s;
+	keyfile = &((str->s)[i]);
+	return;
+err:
+	strerr_warnwunsys(1, "determine user information");
+	stralloc_free(&temp);
+	username = "";
+	keyfile = "";
+}
+
 int main(int argc, char **argv)
 {
 	PROG = argc > 0 ? argv[0] : "fbpad";
 	barstat = 0;
 	stralloc stat = STRALLOC_ZERO;
+	stralloc pwbuf = STRALLOC_ZERO;
 	statline = &stat;
+	user_init(&pwbuf);
 	char *hide = "\x1b[2J\x1b[H\x1b[?25l";
 	char *show = "\x1b[?25h";
 	char **args = argv + 1;
 	int i;
 	conf_read();
+	chklockable();
 	if (fb_init(getenv("FBDEV"))) {
 		strerr_diefn(EXIT_FAILURE, 1,
 			"failed to initialize the framebuffer");
@@ -520,7 +603,8 @@ int main(int argc, char **argv)
 	pad_free();
 	scr_done();
 	fb_free();
-	stralloc_free(statline);
+	stralloc_free(&stat);
+	stralloc_free(&pwbuf);
 	char *pid = getenv("STATUS_PID");
 	if (pid) xexec_ae("kill",
 		((char const *const []){ "kill", "--", pid, 0 }),

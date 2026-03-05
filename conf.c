@@ -14,7 +14,7 @@ static int cursorbg = -1;
 static int borderfg = 0xff0000;
 static int borderwd = 2;
 static char term[128] = "linux";
-static char pass[128];
+static char pass[32];
 static char scrshot[128] = "/tmp/scr";
 static char quitkey;
 static int brighten = 1;
@@ -81,7 +81,7 @@ int conf_read(void)
 		} else if (!strcmp("term", t)) {
 			fscanf(fp, "%127s", term);
 		} else if (!strcmp("scrshot", t)) {
-			fscanf(fp, "%127s", scrshot);
+			fscanf(fp, "%31s", scrshot);
 		} else if (!strcmp("pass", t)) {
 			fscanf(fp, "%127s", pass);
 		} else if (!strcmp("quitkey", t)) {
